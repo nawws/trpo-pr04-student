@@ -1,13 +1,20 @@
 <?php
 declare(strict_types=1);
 
+// --- Ошибки показываем только при локальной разработке ------------------
+$isLocal = PHP_SAPI === 'cli-server'
+    || in_array($_SERVER['SERVER_NAME'] ?? '', ['localhost', '127.0.0.1'], true);
+error_reporting(E_ALL);
+ini_set('display_errors', $isLocal ? '1' : '0');
+ini_set('log_errors', '1');
+
 require_once __DIR__ . '/../src/functions.php';
 
 date_default_timezone_set('Europe/Moscow');
 
 // --- Переменные разных типов -------------------------------------------
 $appName      = 'Заявки сотрудников';          // string
-$appVersion   = '0.3.0';                       // string
+$appVersion   = '1.0.0';                       // string
 $dataDir      = __DIR__ . '/../data';
 $requestsFile = $dataDir . '/requests.json';
 
@@ -35,6 +42,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
 $savedId  = filter_var($_GET['saved'] ?? null, FILTER_VALIDATE_INT) ?: null;
 $requests = loadRequests($requestsFile);
+
+// --- Фильтр таблицы (GET) ----------------------------------------------
+$filterRaw     = $_GET['department'] ?? '';
+$filterRaw     = is_string($filterRaw) ? trim($filterRaw) : '';
+$filterUnknown = $filterRaw !== '' && !in_array($filterRaw, $departments, true);
+$filter        = $filterUnknown ? '' : $filterRaw;   // неизвестный отдел → все записи
+$visibleEmployees = filterByDepartment($employees, $filter);
+
+// --- Самопроверка по form_cases.json -----------------------------------
+$caseResults = runFormCases(loadFormCases($dataDir . '/form_cases.json'), $departments);
+$casesPassed = count(array_filter($caseResults, static fn(array $r): bool => $r['passed']));
+
+$navItems = [                                    // array для меню
+    'employees'    => 'Сотрудники',
+    'request-form' => 'Новая заявка',
+    'requests'     => 'Заявки',
+    'checks'       => 'Проверка',
+];
 ?>
 <!doctype html>
 <html lang="ru">
@@ -48,9 +73,9 @@ $requests = loadRequests($requestsFile);
 <header class="site-header">
     <div class="brand">Практическая работа 4</div>
     <nav>
-        <a href="#employees">Сотрудники</a>
-        <a href="#request-form">Новая заявка</a>
-        <a href="#requests">Заявки</a>
+        <?php foreach ($navItems as $anchor => $title): ?>
+            <a href="#<?= e($anchor) ?>"><?= e($title) ?></a>
+        <?php endforeach; ?>
     </nav>
 </header>
 
@@ -61,19 +86,42 @@ $requests = loadRequests($requestsFile);
         <p class="muted">Версия <?= e($appVersion) ?> · страница сформирована PHP <?= e(date('d.m.Y H:i:s')) ?></p>
     </section>
 
+    <div class="stats">
+        <div class="stat"><b>Сотрудников</b><span><?= $employeeCount ?></span></div>
+        <div class="stat"><b>Отделов</b><span><?= count($departments) ?></span></div>
+        <div class="stat"><b>Средний стаж</b><span><?= number_format($avgExperience, 1, ',', '') ?> г.</span></div>
+        <div class="stat"><b>Проверка кейсов</b><span><?= $casesPassed ?> / <?= count($caseResults) ?></span></div>
+    </div>
+
     <section id="employees">
         <h2>Сотрудники</h2>
         <?php if (!$hasData): ?>
             <p class="muted">Файл employees.csv не найден или пуст.</p>
         <?php else: ?>
-            <p class="muted">Всего: <?= $employeeCount ?>, средний стаж <?= number_format($avgExperience, 1, ',', '') ?> г.</p>
+            <form class="filter" method="get" action="/#employees">
+                <label for="filter-department" class="muted">Отдел:</label>
+                <select id="filter-department" name="department">
+                    <option value="">Все отделы</option>
+                    <?php foreach ($departments as $department): ?>
+                        <option value="<?= e($department) ?>"<?= $filter === $department ? ' selected' : '' ?>><?= e($department) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button class="btn" type="submit">Показать</button>
+                <?php if ($filterRaw !== ''): ?><a class="btn secondary" href="/#employees">Сбросить</a><?php endif; ?>
+            </form>
+
+            <?php if ($filterUnknown): ?>
+                <div class="alert error">Отдел «<?= e($filterRaw) ?>» не найден — показаны все сотрудники.</div>
+            <?php endif; ?>
+
+            <p class="muted">Показано: <?= count($visibleEmployees) ?> из <?= $employeeCount ?></p>
             <div class="table-wrap">
                 <table>
                     <thead>
                     <tr><th>ID</th><th>ФИО</th><th>Отдел</th><th>Стаж, лет</th><th>Уровень</th><th>Email</th></tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($employees as $employee): ?>
+                    <?php foreach ($visibleEmployees as $employee): ?>
                         <tr>
                             <td><?= $employee['id'] ?></td>
                             <td><?= e($employee['name']) ?></td>
@@ -189,6 +237,31 @@ $requests = loadRequests($requestsFile);
                 </table>
             </div>
         <?php endif; ?>
+    </section>
+
+    <section id="checks">
+        <h2>Проверка сценариев из form_cases.json</h2>
+        <p class="muted">Каждый кейс проходит через те же функции normalizeInput и validateInput, что и форма.</p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr><th>Кейс</th><th>name</th><th>experience</th><th>Ожидается</th><th>Получено</th><th>Ошибки</th><th>Итог</th></tr>
+                </thead>
+                <tbody>
+                <?php foreach ($caseResults as $result): ?>
+                    <tr>
+                        <td><?= e($result['case']) ?></td>
+                        <td><?= $result['name'] === '' ? '<span class="muted">(пусто)</span>' : e($result['name']) ?></td>
+                        <td><?= e($result['experience']) ?></td>
+                        <td><?= $result['expected'] ? 'valid' : 'invalid' ?></td>
+                        <td><?= $result['actual'] ? 'valid' : 'invalid' ?></td>
+                        <td><?= $result['errors'] === [] ? '—' : e(implode(' ', $result['errors'])) ?></td>
+                        <td><span class="pill <?= $result['passed'] ? 'ok' : 'fail' ?>"><?= $result['passed'] ? 'пройден' : 'не пройден' ?></span></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
     </section>
 </main>
 </body>

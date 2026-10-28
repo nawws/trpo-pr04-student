@@ -215,3 +215,59 @@ function saveRequest(string $path, array $input): int
     );
     return $id;
 }
+
+// --- Фильтр и самопроверка -----------------------------------------------
+
+/** Фильтр по отделу; null или '' — вернуть все записи. */
+function filterByDepartment(array $employees, ?string $department): array
+{
+    if ($department === null || $department === '') {
+        return $employees;
+    }
+    return array_values(array_filter(
+        $employees,
+        static fn(array $employee): bool => $employee['department'] === $department
+    ));
+}
+
+/** Читает form_cases.json — набор сценариев для проверки валидации. */
+function loadFormCases(string $path): array
+{
+    if (!is_readable($path)) {
+        return [];
+    }
+    $cases = json_decode((string) file_get_contents($path), true);
+    return is_array($cases) ? $cases : [];
+}
+
+/**
+ * Прогоняет каждый кейс через те же normalizeInput/validateInput, что и форма.
+ * В кейсах заданы только name и experience, поэтому остальные поля
+ * заполняются заведомо корректными значениями — проверяется именно поле кейса.
+ */
+function runFormCases(array $cases, array $departments): array
+{
+    $defaults = [
+        'email'      => 'check@example.test',
+        'department' => $departments[0] ?? '',
+        'type'       => array_key_first(REQUEST_TYPES),
+        'comment'    => '',
+    ];
+
+    $results = [];
+    foreach ($cases as $case) {
+        $input  = normalizeInput(array_merge($defaults, $case));
+        $errors = validateInput($input, $departments);
+        $actual = $errors === [];
+        $results[] = [
+            'case'     => (string) ($case['case'] ?? '—'),
+            'name'     => $input['name'],
+            'experience' => $input['experience'],
+            'expected' => (bool) ($case['valid'] ?? false),
+            'actual'   => $actual,
+            'errors'   => $errors,
+            'passed'   => $actual === (bool) ($case['valid'] ?? false),
+        ];
+    }
+    return $results;
+}
