@@ -1,0 +1,6 @@
+﻿id;name;department;experience;email
+1;Анна Белова;Разработка;3;anna@example.test
+2;Илья Соколов;Аналитика;5;ilya@example.test
+3;Мария Орлова;Тестирование;2;maria@example.test
+4;Денис Волков;Разработка;7;denis@example.test
+5;Ольга Миронова;Поддержка;4;olga@example.test
